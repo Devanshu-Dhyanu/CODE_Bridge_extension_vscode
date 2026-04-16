@@ -1,0 +1,155 @@
+{
+  "name": "collab-code",
+  "displayName": "CollabCode Real-time Collaboration",
+  "description": "Real-time collaborative coding for VS Code with rooms, shared cursors, chat, and teacher mode.",
+  "version": "1.0.0",
+  "publisher": "collab-code",
+  "license": "MIT",
+  "keywords": [
+    "collaboration",
+    "live-share",
+    "pair-programming",
+    "education",
+    "realtime",
+    "socket.io",
+    "yjs"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Devanshu-Dhyanu/CODE_Bridge_extension_vscode.git"
+  },
+  "homepage": "https://github.com/Devanshu-Dhyanu/CODE_Bridge_extension_vscode#readme",
+  "bugs": {
+    "url": "https://github.com/Devanshu-Dhyanu/CODE_Bridge_extension_vscode/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:collabCode.createRoom",
+    "onCommand:collabCode.joinRoom",
+    "onCommand:collabCode.leaveRoom",
+    "onCommand:collabCode.sendChatMessage",
+    "onView:collabCode.room",
+    "onView:collabCode.users"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "collabCode.createRoom",
+        "title": "CollabCode: Create Room"
+      },
+      {
+        "command": "collabCode.joinRoom",
+        "title": "CollabCode: Join Room"
+      },
+      {
+        "command": "collabCode.leaveRoom",
+        "title": "CollabCode: Leave Room"
+      },
+      {
+        "command": "collabCode.setTeacherMode",
+        "title": "CollabCode: Set Teacher Mode"
+      },
+      {
+        "command": "collabCode.setCollabMode",
+        "title": "CollabCode: Set Collaboration Mode"
+      },
+      {
+        "command": "collabCode.copyRoomId",
+        "title": "CollabCode: Copy Room ID"
+      },
+      {
+        "command": "collabCode.sendChatMessage",
+        "title": "CollabCode: Send Chat Message"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "collabCode",
+          "title": "CollabCode",
+          "icon": "resources/collabcode.svg"
+        }
+      ]
+    },
+    "views": {
+      "collabCode": [
+        {
+          "id": "collabCode.room",
+          "name": "Room"
+        },
+        {
+          "id": "collabCode.users",
+          "name": "Users"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "collabCode.joinRoom",
+          "when": "view == collabCode.room",
+          "group": "navigation"
+        },
+        {
+          "command": "collabCode.createRoom",
+          "when": "view == collabCode.room",
+          "group": "navigation"
+        },
+        {
+          "command": "collabCode.leaveRoom",
+          "when": "view == collabCode.room",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CollabCode",
+      "properties": {
+        "collabCode.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:3001",
+          "description": "URL of the CollabCode WebSocket server"
+        },
+        "collabCode.userName": {
+          "type": "string",
+          "default": "",
+          "description": "Your display name in collaboration sessions"
+        },
+        "collabCode.lastRoomId": {
+          "type": "string",
+          "default": "",
+          "description": "Most recently used room ID"
+        },
+        "collabCode.shareCursor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Share your cursor position with other collaborators"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -watch -p tsconfig.json",
+    "package": "npx @vscode/vsce package --no-yarn",
+    "publish:marketplace": "npx @vscode/vsce publish --no-yarn"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.7.2",
+    "socket.io-msgpack-parser": "^3.0.2",
+    "yjs": "^13.6.10"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.5",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.23.0",
+    "typescript": "^5.3.3"
+  }
+}

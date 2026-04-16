@@ -1,0 +1,35 @@
+{
+  "name": "collab-code-server",
+  "version": "1.0.0",
+  "description": "Real-time collaborative coding server with Yjs CRDT support",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Devanshu-Dhyanu/CODE_Bridge_extension_vscode.git"
+  },
+  "homepage": "https://github.com/Devanshu-Dhyanu/CODE_Bridge_extension_vscode#readme",
+  "bugs": {
+    "url": "https://github.com/Devanshu-Dhyanu/CODE_Bridge_extension_vscode/issues"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2",
+    "socket.io-msgpack-parser": "^3.0.2",
+    "yjs": "^13.6.10"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.5",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.3.3"
+  }
+}
