@@ -1,7 +1,7 @@
 {
   "name": "collab-code",
-  "displayName": "CollabCode Real-time Collaboration",
-  "description": "Real-time collaborative coding for VS Code with rooms, shared cursors, chat, and teacher mode.",
+  "displayName": "CollabCode",
+  "description": "VS Code extension for room-based collaborative editing with chat and teacher mode.",
   "version": "1.0.0",
   "publisher": "collab-code",
   "license": "MIT",
