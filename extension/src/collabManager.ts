@@ -75,6 +75,7 @@ export class CollabManager {
   async createRoom(
     roomId: string,
     userName: string,
+    documentName?: string,
   ): Promise<CreatedRoomInviteSet | null> {
     if (this.session) {
       void vscode.window.showInformationMessage(
@@ -83,7 +84,7 @@ export class CollabManager {
       return null;
     }
 
-    const payload = await this.buildCreatePayload(roomId, userName);
+    const payload = await this.buildCreatePayload(roomId, userName, documentName);
     const serverUrl =
       vscode.workspace.getConfiguration("collabCode").get<string>("serverUrl") ??
       DEFAULT_SERVER_URL;
@@ -579,15 +580,18 @@ export class CollabManager {
   private async buildCreatePayload(
     roomId: string,
     userName: string,
+    documentName?: string,
   ): Promise<CreateRoomPayload> {
     const activeEditor = vscode.window.activeTextEditor;
     const activeDocument = activeEditor?.document;
+    const normalizedDocumentName = documentName?.trim();
 
     if (!activeDocument) {
       return {
         roomId: roomId.trim(),
         userName: userName.trim(),
-        documentName: `${roomId.trim() || "collab-code"}.txt`,
+        documentName:
+          normalizedDocumentName || `${roomId.trim() || "collab-code"}.txt`,
         languageId: "plaintext",
         initialCode: "",
         clientVersion: CLIENT_VERSION,
@@ -599,7 +603,7 @@ export class CollabManager {
     return {
       roomId: roomId.trim(),
       userName: userName.trim(),
-      documentName: fileName,
+      documentName: normalizedDocumentName || fileName,
       languageId: activeDocument.languageId || "plaintext",
       initialCode: activeDocument.getText(),
       clientVersion: CLIENT_VERSION,
@@ -619,10 +623,7 @@ export class CollabManager {
         : undefined;
 
     if (!document) {
-      document = await vscode.workspace.openTextDocument({
-        language: documentState.languageId || "plaintext",
-        content: documentState.code,
-      });
+      document = await this.openCollaborativeDocument(documentState);
       this.collaborativeDocumentUri = document.uri.toString();
     }
 
@@ -636,6 +637,50 @@ export class CollabManager {
     }
 
     return document;
+  }
+
+  private async openCollaborativeDocument(
+    documentState: RoomDocument,
+  ): Promise<vscode.TextDocument> {
+    const targetUri = this.createCollaborativeDocumentUri(documentState.name);
+    let document = await vscode.workspace.openTextDocument(targetUri);
+
+    const desiredLanguageId = documentState.languageId || "plaintext";
+    if (
+      desiredLanguageId !== "plaintext" &&
+      document.languageId !== desiredLanguageId
+    ) {
+      try {
+        document = await vscode.languages.setTextDocumentLanguage(
+          document,
+          desiredLanguageId,
+        );
+      } catch {
+        // Keep the inferred language if VS Code rejects the requested one.
+      }
+    }
+
+    if (this.session) {
+      this.session.document.languageId = document.languageId;
+    }
+
+    return document;
+  }
+
+  private createCollaborativeDocumentUri(documentName: string): vscode.Uri {
+    const normalizedDocumentName = documentName.trim() || "collab-code.txt";
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+
+    if (workspaceFolder) {
+      return vscode.Uri.file(
+        path.join(workspaceFolder.uri.fsPath, normalizedDocumentName),
+      ).with({ scheme: "untitled" });
+    }
+
+    return vscode.Uri.from({
+      scheme: "untitled",
+      path: `/${normalizedDocumentName}`,
+    });
   }
 
   private async applySharedCodeToDocument(code: string): Promise<void> {

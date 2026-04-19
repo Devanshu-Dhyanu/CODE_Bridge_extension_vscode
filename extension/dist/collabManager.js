@@ -68,12 +68,12 @@ class CollabManager {
     get viewState() {
         return this.buildViewState();
     }
-    async createRoom(roomId, userName) {
+    async createRoom(roomId, userName, documentName) {
         if (this.session) {
             void vscode.window.showInformationMessage("CollabCode: Leave the current room before creating another one.");
             return null;
         }
-        const payload = await this.buildCreatePayload(roomId, userName);
+        const payload = await this.buildCreatePayload(roomId, userName, documentName);
         const serverUrl = vscode.workspace.getConfiguration("collabCode").get("serverUrl") ??
             protocol_1.DEFAULT_SERVER_URL;
         this.intentionalDisconnect = false;
@@ -452,14 +452,15 @@ class CollabManager {
         this.ydoc = null;
         this.ytext = null;
     }
-    async buildCreatePayload(roomId, userName) {
+    async buildCreatePayload(roomId, userName, documentName) {
         const activeEditor = vscode.window.activeTextEditor;
         const activeDocument = activeEditor?.document;
+        const normalizedDocumentName = documentName?.trim();
         if (!activeDocument) {
             return {
                 roomId: roomId.trim(),
                 userName: userName.trim(),
-                documentName: `${roomId.trim() || "collab-code"}.txt`,
+                documentName: normalizedDocumentName || `${roomId.trim() || "collab-code"}.txt`,
                 languageId: "plaintext",
                 initialCode: "",
                 clientVersion: protocol_1.CLIENT_VERSION,
@@ -469,7 +470,7 @@ class CollabManager {
         return {
             roomId: roomId.trim(),
             userName: userName.trim(),
-            documentName: fileName,
+            documentName: normalizedDocumentName || fileName,
             languageId: activeDocument.languageId || "plaintext",
             initialCode: activeDocument.getText(),
             clientVersion: protocol_1.CLIENT_VERSION,
@@ -480,10 +481,7 @@ class CollabManager {
             ? vscode.workspace.textDocuments.find((item) => item.uri.toString() === this.collaborativeDocumentUri)
             : undefined;
         if (!document) {
-            document = await vscode.workspace.openTextDocument({
-                language: documentState.languageId || "plaintext",
-                content: documentState.code,
-            });
+            document = await this.openCollaborativeDocument(documentState);
             this.collaborativeDocumentUri = document.uri.toString();
         }
         this.cursorManager.setDocument(document.uri);
@@ -494,6 +492,35 @@ class CollabManager {
             });
         }
         return document;
+    }
+    async openCollaborativeDocument(documentState) {
+        const targetUri = this.createCollaborativeDocumentUri(documentState.name);
+        let document = await vscode.workspace.openTextDocument(targetUri);
+        const desiredLanguageId = documentState.languageId || "plaintext";
+        if (desiredLanguageId !== "plaintext" &&
+            document.languageId !== desiredLanguageId) {
+            try {
+                document = await vscode.languages.setTextDocumentLanguage(document, desiredLanguageId);
+            }
+            catch {
+                // Keep the inferred language if VS Code rejects the requested one.
+            }
+        }
+        if (this.session) {
+            this.session.document.languageId = document.languageId;
+        }
+        return document;
+    }
+    createCollaborativeDocumentUri(documentName) {
+        const normalizedDocumentName = documentName.trim() || "collab-code.txt";
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (workspaceFolder) {
+            return vscode.Uri.file(path.join(workspaceFolder.uri.fsPath, normalizedDocumentName)).with({ scheme: "untitled" });
+        }
+        return vscode.Uri.from({
+            scheme: "untitled",
+            path: `/${normalizedDocumentName}`,
+        });
     }
     async applySharedCodeToDocument(code) {
         if (!this.session) {

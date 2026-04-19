@@ -2,7 +2,7 @@
   "name": "collab-code",
   "displayName": "CollabCode",
   "description": "Hosted room-based collaboration for VS Code with invite tokens, chat, and teacher mode.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "publisher": "vajracognixia",
   "license": "MIT",
   "icon": "resources/collabcode.png",

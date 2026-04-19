@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 exports.deactivate = deactivate;
+const path = __importStar(require("path"));
 const vscode = __importStar(require("vscode"));
 const collabManager_1 = require("./collabManager");
 const cursorManager_1 = require("./cursorManager");
@@ -146,13 +147,17 @@ function activate(context) {
         if (!userName) {
             return;
         }
+        const documentName = await promptForDocumentName(roomId.trim());
+        if (!documentName) {
+            return;
+        }
         await vscode.workspace
             .getConfiguration("collabCode")
             .update("userName", userName.trim(), vscode.ConfigurationTarget.Global);
         await vscode.workspace
             .getConfiguration("collabCode")
             .update("lastRoomId", roomId.trim(), vscode.ConfigurationTarget.Global);
-        const inviteSet = await collabManager.createRoom(roomId.trim(), userName.trim());
+        const inviteSet = await collabManager.createRoom(roomId.trim(), userName.trim(), documentName.trim());
         if (!inviteSet) {
             return;
         }
@@ -193,6 +198,17 @@ function activate(context) {
             value: savedName,
             placeHolder: "for example: Alice",
             validateInput: (value) => value.trim().length > 0 ? null : "Display name cannot be empty.",
+            ignoreFocusOut: true,
+        });
+    }
+    async function promptForDocumentName(roomId) {
+        const activeDocument = vscode.window.activeTextEditor?.document;
+        const suggestedName = path.basename(activeDocument?.fileName || "") || `${roomId || "collab-code"}.txt`;
+        return await vscode.window.showInputBox({
+            prompt: "Shared document name",
+            value: suggestedName,
+            placeHolder: "for example: main.cpp",
+            validateInput: (value) => value.trim().length > 0 ? null : "Document name cannot be empty.",
             ignoreFocusOut: true,
         });
     }

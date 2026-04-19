@@ -1,3 +1,4 @@
+import * as path from "path";
 import * as vscode from "vscode";
 import { CollabManager } from "./collabManager";
 import { CursorManager } from "./cursorManager";
@@ -202,6 +203,11 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
 
+    const documentName = await promptForDocumentName(roomId.trim());
+    if (!documentName) {
+      return;
+    }
+
     await vscode.workspace
       .getConfiguration("collabCode")
       .update("userName", userName.trim(), vscode.ConfigurationTarget.Global);
@@ -209,7 +215,11 @@ export function activate(context: vscode.ExtensionContext): void {
       .getConfiguration("collabCode")
       .update("lastRoomId", roomId.trim(), vscode.ConfigurationTarget.Global);
 
-    const inviteSet = await collabManager.createRoom(roomId.trim(), userName.trim());
+    const inviteSet = await collabManager.createRoom(
+      roomId.trim(),
+      userName.trim(),
+      documentName.trim(),
+    );
     if (!inviteSet) {
       return;
     }
@@ -265,6 +275,21 @@ export function activate(context: vscode.ExtensionContext): void {
       placeHolder: "for example: Alice",
       validateInput: (value) =>
         value.trim().length > 0 ? null : "Display name cannot be empty.",
+      ignoreFocusOut: true,
+    });
+  }
+
+  async function promptForDocumentName(roomId: string): Promise<string | undefined> {
+    const activeDocument = vscode.window.activeTextEditor?.document;
+    const suggestedName =
+      path.basename(activeDocument?.fileName || "") || `${roomId || "collab-code"}.txt`;
+
+    return await vscode.window.showInputBox({
+      prompt: "Shared document name",
+      value: suggestedName,
+      placeHolder: "for example: main.cpp",
+      validateInput: (value) =>
+        value.trim().length > 0 ? null : "Document name cannot be empty.",
       ignoreFocusOut: true,
     });
   }
