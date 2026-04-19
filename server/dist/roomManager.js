@@ -52,23 +52,64 @@ const CURSOR_COLORS = [
 ];
 const MAX_CHAT_HISTORY = 100;
 class RoomManager {
-    constructor() {
+    constructor(options) {
+        this.options = options;
         this.rooms = new Map();
         this.yjsDocs = new Map();
         this.userRoomMap = new Map();
     }
-    addUser(socketId, payload) {
-        const { room, createdRoom } = this.getOrCreateRoom(payload);
-        let role = payload.role;
-        if (role === "teacher") {
-            const teacherAlreadyPresent = [...room.users.values()].some((user) => user.role === "teacher");
-            if (teacherAlreadyPresent) {
-                role = "student";
-            }
+    rehydrateRooms(now = Date.now()) {
+        const persistedRooms = this.options.store.loadRooms(now);
+        for (const record of persistedRooms) {
+            const room = this.hydrateRoom(record);
+            this.rooms.set(room.id, room);
+        }
+        return persistedRooms.length;
+    }
+    createRoom(payload) {
+        if (this.rooms.has(payload.roomId)) {
+            return null;
+        }
+        const now = Date.now();
+        const room = {
+            id: payload.roomId,
+            mode: "collaboration",
+            document: {
+                name: payload.documentName,
+                languageId: payload.languageId,
+                code: payload.initialCode,
+            },
+            users: new Map(),
+            cursors: new Map(),
+            messages: [],
+            createdAt: now,
+            updatedAt: now,
+            expiresAt: now + this.options.roomTtlMs,
+        };
+        this.rooms.set(room.id, room);
+        const ydoc = new Y.Doc();
+        const ytext = ydoc.getText("code");
+        if (payload.initialCode) {
+            ytext.insert(0, payload.initialCode);
+        }
+        this.yjsDocs.set(room.id, ydoc);
+        this.appendSystemMessage(room.id, `Room created for ${payload.documentName || "untitled document"}.`);
+        return room;
+    }
+    addUser(socketId, roomId, userName, role) {
+        const room = this.rooms.get(roomId);
+        if (!room) {
+            return { ok: false, reason: "room-not-found" };
+        }
+        if (room.users.size >= this.options.maxUsersPerRoom) {
+            return { ok: false, reason: "room-full" };
+        }
+        if (role === "teacher" && this.hasTeacher(room)) {
+            return { ok: false, reason: "teacher-already-present" };
         }
         const user = {
             id: socketId,
-            name: payload.userName,
+            name: userName,
             role,
             roomId: room.id,
             color: this.assignColor(room),
@@ -78,7 +119,7 @@ class RoomManager {
         this.userRoomMap.set(socketId, room.id);
         this.touchRoom(room);
         this.appendSystemMessage(room.id, `${user.name} joined the room as ${user.role}.`);
-        return { room, user, createdRoom };
+        return { ok: true, room, user };
     }
     removeUser(socketId) {
         const roomId = this.userRoomMap.get(socketId);
@@ -117,6 +158,18 @@ class RoomManager {
         this.rooms.delete(roomId);
         this.yjsDocs.get(roomId)?.destroy();
         this.yjsDocs.delete(roomId);
+        this.options.store.deleteRoom(roomId);
+    }
+    deleteExpiredRooms(now = Date.now()) {
+        let deletedCount = 0;
+        for (const room of [...this.rooms.values()]) {
+            if (room.expiresAt <= now) {
+                this.deleteRoom(room.id);
+                deletedCount += 1;
+            }
+        }
+        deletedCount += this.options.store.deleteExpiredRooms(now);
+        return deletedCount;
     }
     getRoom(roomId) {
         return this.rooms.get(roomId);
@@ -163,6 +216,7 @@ class RoomManager {
         Y.applyUpdate(ydoc, update);
         this.syncDocumentFromYjs(roomId);
         this.touchRoom(room);
+        this.persistRoom(room.id);
         return true;
     }
     getEncodedYjsState(roomId) {
@@ -212,7 +266,6 @@ class RoomManager {
             updatedAt: Date.now(),
         };
         room.cursors.set(user.id, cursorState);
-        this.touchRoom(room);
         return cursorState;
     }
     removeCursor(socketId) {
@@ -225,7 +278,6 @@ class RoomManager {
             return;
         }
         room.cursors.delete(socketId);
-        this.touchRoom(room);
     }
     addChatMessage(socketId, text) {
         const user = this.getUser(socketId);
@@ -248,6 +300,7 @@ class RoomManager {
         room.messages.push(message);
         this.pruneMessages(room);
         this.touchRoom(room);
+        this.persistRoom(room.id);
         return message;
     }
     addSystemMessage(roomId, text) {
@@ -260,6 +313,7 @@ class RoomManager {
         }
         room.mode = mode;
         this.touchRoom(room);
+        this.persistRoom(room.id);
         return true;
     }
     listRooms() {
@@ -269,36 +323,45 @@ class RoomManager {
             userCount: room.users.size,
             documentName: room.document.name,
             updatedAt: room.updatedAt,
+            expiresAt: room.expiresAt,
         }));
     }
-    getOrCreateRoom(payload) {
-        const existingRoom = this.rooms.get(payload.roomId);
-        if (existingRoom) {
-            return { room: existingRoom, createdRoom: false };
+    close() {
+        for (const ydoc of this.yjsDocs.values()) {
+            ydoc.destroy();
         }
+        this.yjsDocs.clear();
+        this.options.store.close();
+    }
+    hydrateRoom(record) {
         const room = {
-            id: payload.roomId,
-            mode: "collaboration",
-            document: {
-                name: payload.documentName,
-                languageId: payload.languageId,
-                code: payload.initialCode,
-            },
+            id: record.id,
+            mode: record.mode,
+            document: { ...record.document },
             users: new Map(),
             cursors: new Map(),
-            messages: [],
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+            messages: [...record.messages],
+            createdAt: record.createdAt,
+            updatedAt: record.updatedAt,
+            expiresAt: record.expiresAt,
         };
-        this.rooms.set(room.id, room);
         const ydoc = new Y.Doc();
-        const ytext = ydoc.getText("code");
-        if (payload.initialCode) {
-            ytext.insert(0, payload.initialCode);
+        try {
+            if (record.yjsState.length > 0) {
+                Y.applyUpdate(ydoc, record.yjsState);
+            }
+            else if (record.document.code) {
+                ydoc.getText("code").insert(0, record.document.code);
+            }
         }
+        catch {
+            if (record.document.code) {
+                ydoc.getText("code").insert(0, record.document.code);
+            }
+        }
+        room.document.code = ydoc.getText("code").toString();
         this.yjsDocs.set(room.id, ydoc);
-        this.appendSystemMessage(room.id, `Room created for ${payload.documentName || "untitled document"}.`);
-        return { room, createdRoom: true };
+        return room;
     }
     syncDocumentFromYjs(roomId) {
         const room = this.rooms.get(roomId);
@@ -313,6 +376,9 @@ class RoomManager {
         return (CURSOR_COLORS.find((color) => !usedColors.has(color)) ??
             CURSOR_COLORS[room.users.size % CURSOR_COLORS.length]);
     }
+    hasTeacher(room) {
+        return [...room.users.values()].some((user) => user.role === "teacher");
+    }
     pruneMessages(room) {
         if (room.messages.length <= MAX_CHAT_HISTORY) {
             return;
@@ -320,7 +386,9 @@ class RoomManager {
         room.messages.splice(0, room.messages.length - MAX_CHAT_HISTORY);
     }
     touchRoom(room) {
-        room.updatedAt = Date.now();
+        const now = Date.now();
+        room.updatedAt = now;
+        room.expiresAt = now + this.options.roomTtlMs;
     }
     appendSystemMessage(roomId, text) {
         const room = this.rooms.get(roomId);
@@ -339,7 +407,16 @@ class RoomManager {
         room.messages.push(message);
         this.pruneMessages(room);
         this.touchRoom(room);
+        this.persistRoom(roomId);
         return message;
+    }
+    persistRoom(roomId) {
+        const room = this.rooms.get(roomId);
+        const yjsState = this.getEncodedYjsState(roomId);
+        if (!room || !yjsState) {
+            return;
+        }
+        this.options.store.saveRoom(room, yjsState);
     }
 }
 exports.RoomManager = RoomManager;

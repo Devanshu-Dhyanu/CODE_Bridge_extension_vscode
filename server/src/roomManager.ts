@@ -1,10 +1,11 @@
 import { randomUUID } from "crypto";
 import * as Y from "yjs";
+import { PersistedRoomRecord, PersistentRoomStore } from "./persistentRoomStore";
 import {
   ChatMessage,
+  CreateRoomPayload,
   CursorBroadcastPayload,
   CursorUpdatePayload,
-  JoinRoomPayload,
   RemovedUserResult,
   Room,
   RoomJoinResult,
@@ -33,27 +34,89 @@ const CURSOR_COLORS = [
 
 const MAX_CHAT_HISTORY = 100;
 
+interface RoomManagerOptions {
+  maxUsersPerRoom: number;
+  roomTtlMs: number;
+  store: PersistentRoomStore;
+}
+
 export class RoomManager {
   private readonly rooms = new Map<string, Room>();
   private readonly yjsDocs = new Map<string, Y.Doc>();
   private readonly userRoomMap = new Map<string, string>();
 
-  addUser(socketId: string, payload: JoinRoomPayload): RoomJoinResult {
-    const { room, createdRoom } = this.getOrCreateRoom(payload);
+  constructor(private readonly options: RoomManagerOptions) {}
 
-    let role: UserRole = payload.role;
-    if (role === "teacher") {
-      const teacherAlreadyPresent = [...room.users.values()].some(
-        (user) => user.role === "teacher",
-      );
-      if (teacherAlreadyPresent) {
-        role = "student";
-      }
+  rehydrateRooms(now = Date.now()): number {
+    const persistedRooms = this.options.store.loadRooms(now);
+    for (const record of persistedRooms) {
+      const room = this.hydrateRoom(record);
+      this.rooms.set(room.id, room);
+    }
+
+    return persistedRooms.length;
+  }
+
+  createRoom(payload: CreateRoomPayload): Room | null {
+    if (this.rooms.has(payload.roomId)) {
+      return null;
+    }
+
+    const now = Date.now();
+    const room: Room = {
+      id: payload.roomId,
+      mode: "collaboration",
+      document: {
+        name: payload.documentName,
+        languageId: payload.languageId,
+        code: payload.initialCode,
+      },
+      users: new Map(),
+      cursors: new Map(),
+      messages: [],
+      createdAt: now,
+      updatedAt: now,
+      expiresAt: now + this.options.roomTtlMs,
+    };
+
+    this.rooms.set(room.id, room);
+
+    const ydoc = new Y.Doc();
+    const ytext = ydoc.getText("code");
+    if (payload.initialCode) {
+      ytext.insert(0, payload.initialCode);
+    }
+    this.yjsDocs.set(room.id, ydoc);
+    this.appendSystemMessage(
+      room.id,
+      `Room created for ${payload.documentName || "untitled document"}.`,
+    );
+
+    return room;
+  }
+
+  addUser(
+    socketId: string,
+    roomId: string,
+    userName: string,
+    role: UserRole,
+  ): RoomJoinResult {
+    const room = this.rooms.get(roomId);
+    if (!room) {
+      return { ok: false, reason: "room-not-found" };
+    }
+
+    if (room.users.size >= this.options.maxUsersPerRoom) {
+      return { ok: false, reason: "room-full" };
+    }
+
+    if (role === "teacher" && this.hasTeacher(room)) {
+      return { ok: false, reason: "teacher-already-present" };
     }
 
     const user: User = {
       id: socketId,
-      name: payload.userName,
+      name: userName,
       role,
       roomId: room.id,
       color: this.assignColor(room),
@@ -63,13 +126,9 @@ export class RoomManager {
     room.users.set(socketId, user);
     this.userRoomMap.set(socketId, room.id);
     this.touchRoom(room);
+    this.appendSystemMessage(room.id, `${user.name} joined the room as ${user.role}.`);
 
-    this.appendSystemMessage(
-      room.id,
-      `${user.name} joined the room as ${user.role}.`,
-    );
-
-    return { room, user, createdRoom };
+    return { ok: true, room, user };
   }
 
   removeUser(socketId: string): RemovedUserResult | null {
@@ -116,6 +175,21 @@ export class RoomManager {
     this.rooms.delete(roomId);
     this.yjsDocs.get(roomId)?.destroy();
     this.yjsDocs.delete(roomId);
+    this.options.store.deleteRoom(roomId);
+  }
+
+  deleteExpiredRooms(now = Date.now()): number {
+    let deletedCount = 0;
+
+    for (const room of [...this.rooms.values()]) {
+      if (room.expiresAt <= now) {
+        this.deleteRoom(room.id);
+        deletedCount += 1;
+      }
+    }
+
+    deletedCount += this.options.store.deleteExpiredRooms(now);
+    return deletedCount;
   }
 
   getRoom(roomId: string): Room | undefined {
@@ -173,6 +247,7 @@ export class RoomManager {
     Y.applyUpdate(ydoc, update);
     this.syncDocumentFromYjs(roomId);
     this.touchRoom(room);
+    this.persistRoom(room.id);
     return true;
   }
 
@@ -185,7 +260,7 @@ export class RoomManager {
     return Y.encodeStateAsUpdate(ydoc);
   }
 
-  getRoomState(roomId: string, selfId: string): RoomStatePayload | null {
+  getRoomState(roomId: string, selfId: string): Omit<RoomStatePayload, "protocolVersion" | "serverVersion"> | null {
     const room = this.rooms.get(roomId);
     const yjsState = this.getEncodedYjsState(roomId);
     if (!room || !yjsState) {
@@ -230,7 +305,6 @@ export class RoomManager {
     };
 
     room.cursors.set(user.id, cursorState);
-    this.touchRoom(room);
     return cursorState;
   }
 
@@ -246,7 +320,6 @@ export class RoomManager {
     }
 
     room.cursors.delete(socketId);
-    this.touchRoom(room);
   }
 
   addChatMessage(socketId: string, text: string): ChatMessage | null {
@@ -273,6 +346,7 @@ export class RoomManager {
     room.messages.push(message);
     this.pruneMessages(room);
     this.touchRoom(room);
+    this.persistRoom(room.id);
     return message;
   }
 
@@ -288,6 +362,7 @@ export class RoomManager {
 
     room.mode = mode;
     this.touchRoom(room);
+    this.persistRoom(room.id);
     return true;
   }
 
@@ -298,44 +373,48 @@ export class RoomManager {
       userCount: room.users.size,
       documentName: room.document.name,
       updatedAt: room.updatedAt,
+      expiresAt: room.expiresAt,
     }));
   }
 
-  private getOrCreateRoom(payload: JoinRoomPayload): { room: Room; createdRoom: boolean } {
-    const existingRoom = this.rooms.get(payload.roomId);
-    if (existingRoom) {
-      return { room: existingRoom, createdRoom: false };
+  close(): void {
+    for (const ydoc of this.yjsDocs.values()) {
+      ydoc.destroy();
     }
 
+    this.yjsDocs.clear();
+    this.options.store.close();
+  }
+
+  private hydrateRoom(record: PersistedRoomRecord): Room {
     const room: Room = {
-      id: payload.roomId,
-      mode: "collaboration",
-      document: {
-        name: payload.documentName,
-        languageId: payload.languageId,
-        code: payload.initialCode,
-      },
+      id: record.id,
+      mode: record.mode,
+      document: { ...record.document },
       users: new Map(),
       cursors: new Map(),
-      messages: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      messages: [...record.messages],
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      expiresAt: record.expiresAt,
     };
 
-    this.rooms.set(room.id, room);
-
     const ydoc = new Y.Doc();
-    const ytext = ydoc.getText("code");
-    if (payload.initialCode) {
-      ytext.insert(0, payload.initialCode);
+    try {
+      if (record.yjsState.length > 0) {
+        Y.applyUpdate(ydoc, record.yjsState);
+      } else if (record.document.code) {
+        ydoc.getText("code").insert(0, record.document.code);
+      }
+    } catch {
+      if (record.document.code) {
+        ydoc.getText("code").insert(0, record.document.code);
+      }
     }
-    this.yjsDocs.set(room.id, ydoc);
-    this.appendSystemMessage(
-      room.id,
-      `Room created for ${payload.documentName || "untitled document"}.`,
-    );
 
-    return { room, createdRoom: true };
+    room.document.code = ydoc.getText("code").toString();
+    this.yjsDocs.set(room.id, ydoc);
+    return room;
   }
 
   private syncDocumentFromYjs(roomId: string): void {
@@ -356,6 +435,10 @@ export class RoomManager {
     );
   }
 
+  private hasTeacher(room: Room): boolean {
+    return [...room.users.values()].some((user) => user.role === "teacher");
+  }
+
   private pruneMessages(room: Room): void {
     if (room.messages.length <= MAX_CHAT_HISTORY) {
       return;
@@ -365,7 +448,9 @@ export class RoomManager {
   }
 
   private touchRoom(room: Room): void {
-    room.updatedAt = Date.now();
+    const now = Date.now();
+    room.updatedAt = now;
+    room.expiresAt = now + this.options.roomTtlMs;
   }
 
   private appendSystemMessage(roomId: string, text: string): ChatMessage | null {
@@ -387,6 +472,17 @@ export class RoomManager {
     room.messages.push(message);
     this.pruneMessages(room);
     this.touchRoom(room);
+    this.persistRoom(roomId);
     return message;
+  }
+
+  private persistRoom(roomId: string): void {
+    const room = this.rooms.get(roomId);
+    const yjsState = this.getEncodedYjsState(roomId);
+    if (!room || !yjsState) {
+      return;
+    }
+
+    this.options.store.saveRoom(room, yjsState);
   }
 }

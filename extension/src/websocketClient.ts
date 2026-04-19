@@ -3,10 +3,13 @@ import { io, Socket } from "socket.io-client";
 import {
   ChatMessage,
   ChatMessagePayload,
+  CreateRoomPayload,
+  CreateRoomResponse,
   CursorBroadcastPayload,
   CursorUpdatePayload,
   JoinRoomPayload,
   ModeChangePayload,
+  ProtocolErrorPayload,
   RoomStatePayload,
   RoomUser,
   YjsUpdatePayload,
@@ -24,7 +27,7 @@ type ClientEventMap = {
   "user-left": (payload: { userId: string }) => void;
   "chat-message": (payload: ChatMessage) => void;
   "mode-changed": (payload: { mode: ModeChangePayload["mode"] }) => void;
-  error: (payload: { message: string }) => void;
+  error: (payload: ProtocolErrorPayload) => void;
 };
 
 export class WebSocketClient extends EventEmitter {
@@ -90,6 +93,37 @@ export class WebSocketClient extends EventEmitter {
 
   joinRoom(payload: JoinRoomPayload): void {
     this.socket?.emit("join-room", payload);
+  }
+
+  async createRoom(payload: CreateRoomPayload): Promise<CreateRoomResponse> {
+    if (!this.socket) {
+      throw new Error("WebSocket connection is not available.");
+    }
+
+    return await new Promise<CreateRoomResponse>((resolve, reject) => {
+      this.socket
+        ?.timeout(10_000)
+        .emit(
+          "create-room",
+          payload,
+          (
+            error: Error | null,
+            response: CreateRoomResponse | undefined,
+          ) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+
+            if (!response) {
+              reject(new Error("The server did not return a room creation response."));
+              return;
+            }
+
+            resolve(response);
+          },
+        );
+    });
   }
 
   sendYjsUpdate(payload: YjsUpdatePayload): void {

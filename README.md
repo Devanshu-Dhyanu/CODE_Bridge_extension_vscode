@@ -1,107 +1,43 @@
 # CollabCode
 
-CollabCode is a small VS Code collaboration setup built as two parts:
+CollabCode is a two-part collaboration project:
 
-- a VS Code extension in `extension/`
-- a Socket.IO + Yjs server in `server/`
+- `extension/`: a VS Code extension for invite-only collaborative rooms
+- `server/`: a durable Socket.IO + Yjs backend with SQLite persistence
 
-It lets multiple users join the same room, sync code in real time, share cursors, and use a simple room chat. There is also a teacher mode where only the teacher can edit and everyone else stays read-only.
+## Current product shape
 
-This is intentionally smaller in scope than something like Live Share. The focus here is room-based collaboration with a simple local setup.
+- Hosted backend by default for extension users
+- Invite-token access for teacher and student roles
+- Shared scratch document, room chat, and cursor sharing
+- Teacher mode for read-only classroom sessions
+- Seven-day room retention with automatic cleanup
 
-## What It Does
+## Quick start for users
 
-- create a room or join an existing one
-- keep editor content in sync with Yjs
-- show remote cursors and selections
-- switch between collaboration mode and teacher mode
-- show connected users in the sidebar
-- send room chat messages from inside the extension
-- reconnect and rejoin the room after short disconnects
+1. Install the extension from the VS Code Marketplace or a VSIX build.
+2. Run `CollabCode: Create Room`.
+3. Share the copied student invite token.
+4. Collaborators run `CollabCode: Join Room` with that token.
 
-## Repo Layout
-
-```text
-collab-code/
-|- extension/   VS Code extension
-|- server/      Express + Socket.IO backend
-`- README.md
-```
-
-## How It Works
-
-When someone joins a room, the server returns the current room state, user list, chat history, and the latest Yjs document state. The extension opens a dedicated collaborative document, applies that state locally, and then sends incremental updates back through Socket.IO as edits happen.
-
-Teacher mode is handled on the server side. In that mode, only the teacher can push document changes. Students can still stay connected, see cursors, and use chat.
-
-## Local Setup
-
-### 1. Install dependencies
+## Repo commands
 
 ```bash
 cd server
 npm install
+npm run build
+npm run test
 
 cd ../extension
 npm install
-```
-
-### 2. Start the server
-
-```bash
-cd server
-npm run dev
-```
-
-The default server URL is `http://localhost:3001`.
-
-### 3. Build the extension
-
-```bash
-cd extension
 npm run build
+npm run test
+npm run package
 ```
 
-### 4. Run it in VS Code
+## Documentation
 
-1. Open the `extension` folder in VS Code.
-2. Press `F5` to launch an Extension Development Host window.
-3. In that window, run `CollabCode: Create Room`.
-4. Open a second Extension Development Host window.
-5. Run `CollabCode: Join Room` and use the same room ID.
-
-## Commands
-
-- `CollabCode: Create Room`
-- `CollabCode: Join Room`
-- `CollabCode: Leave Room`
-- `CollabCode: Set Teacher Mode`
-- `CollabCode: Set Collaboration Mode`
-- `CollabCode: Copy Room ID`
-- `CollabCode: Send Chat Message`
-
-## Settings
-
-- `collabCode.serverUrl`: backend URL
-- `collabCode.userName`: saved display name
-- `collabCode.lastRoomId`: last room ID used
-- `collabCode.shareCursor`: enable or disable cursor sharing
-
-## A Few Notes
-
-- Room data is currently stored in memory, so restarting the server clears active rooms and chat history.
-- The extension opens a dedicated collaborative buffer instead of directly editing files from the workspace.
-- The server exposes `GET /health` and `GET /rooms` for quick checks while testing.
-- If you deploy the backend, only the `server/` folder needs to run on the host. Then point `collabCode.serverUrl` at that deployed URL.
-
-## Build Check
-
-If you want to verify both parts manually:
-
-```bash
-cd server
-npm run build
-
-cd ../extension
-npm run build
-```
+- Backend deploy guide: [docs/DEPLOY_BACKEND.md](docs/DEPLOY_BACKEND.md)
+- Publish guide: [docs/PUBLISH_EXTENSION.md](docs/PUBLISH_EXTENSION.md)
+- Incident/debug guide: [docs/INCIDENT_RESPONSE.md](docs/INCIDENT_RESPONSE.md)
+- Marketplace README: [extension/README.md](extension/README.md)

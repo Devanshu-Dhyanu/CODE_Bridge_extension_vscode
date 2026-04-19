@@ -1,4 +1,5 @@
 src/**
+tests/**
 **/*.ts
 dist/**/*.map
 tsconfig.json

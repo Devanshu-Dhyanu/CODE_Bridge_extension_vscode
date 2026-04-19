@@ -1,6 +1,8 @@
 export type UserRole = "teacher" | "student";
 export type RoomMode = "teacher" | "collaboration";
 export type ChatMessageType = "user" | "system";
+export type ProtocolErrorCode = "admin-required" | "invalid-payload" | "invite-invalid-or-expired" | "protocol-mismatch" | "rate-limited" | "read-only" | "room-full" | "room-unavailable" | "teacher-already-connected" | "unauthorized";
+export type RoomJoinFailureReason = "room-full" | "room-not-found" | "teacher-already-present";
 export interface CursorPosition {
     line: number;
     character: number;
@@ -51,14 +53,20 @@ export interface Room {
     messages: ChatMessage[];
     createdAt: number;
     updatedAt: number;
+    expiresAt: number;
 }
-export interface JoinRoomPayload {
+export interface CreateRoomPayload {
     roomId: string;
     userName: string;
-    role: UserRole;
     documentName: string;
     languageId: string;
     initialCode: string;
+    clientVersion: string;
+}
+export interface JoinRoomPayload {
+    inviteToken: string;
+    userName: string;
+    clientVersion: string;
 }
 export interface YjsUpdatePayload {
     roomId: string;
@@ -90,6 +98,26 @@ export interface RoomStatePayload {
     };
     selfId: string;
     yjsState: Uint8Array;
+    protocolVersion: string;
+    serverVersion: string;
+}
+export interface InviteTokenClaims {
+    version: number;
+    scope: "room:join";
+    roomId: string;
+    role: UserRole;
+    exp: number;
+}
+export interface CreateRoomResponse {
+    ok: boolean;
+    code?: ProtocolErrorCode;
+    message?: string;
+    roomState?: RoomStatePayload;
+    teacherInviteToken?: string;
+    studentInviteToken?: string;
+    protocolVersion?: string;
+    serverVersion?: string;
+    retryAfterMs?: number;
 }
 export interface RoomListItem {
     id: string;
@@ -97,15 +125,24 @@ export interface RoomListItem {
     userCount: number;
     documentName: string;
     updatedAt: number;
+    expiresAt: number;
 }
-export interface RoomJoinResult {
+export type RoomJoinResult = {
+    ok: true;
     room: Room;
     user: User;
-    createdRoom: boolean;
-}
+} | {
+    ok: false;
+    reason: RoomJoinFailureReason;
+};
 export interface RemovedUserResult {
     roomId: string;
     roomIsEmpty: boolean;
     user: User;
+}
+export interface ProtocolErrorPayload {
+    code: ProtocolErrorCode;
+    message: string;
+    retryAfterMs?: number;
 }
 //# sourceMappingURL=types.d.ts.map

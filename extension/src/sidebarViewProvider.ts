@@ -28,11 +28,20 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
         case "ready":
           await this.postState();
           break;
+        case "create":
+          await vscode.commands.executeCommand("collabCode.createRoom");
+          break;
         case "join":
           await vscode.commands.executeCommand("collabCode.joinRoom");
           break;
         case "leave":
           await vscode.commands.executeCommand("collabCode.leaveRoom");
+          break;
+        case "copy-student-invite":
+          await vscode.commands.executeCommand("collabCode.copyStudentInviteToken");
+          break;
+        case "getting-started":
+          await vscode.commands.executeCommand("collabCode.openGettingStarted");
           break;
         case "copy-room-id":
           await vscode.commands.executeCommand("collabCode.copyRoomId");
@@ -222,11 +231,16 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
 
       <section class="card">
         <div class="actions">
+          <button id="createButton">Create Room</button>
           <button id="joinButton">Join Room</button>
           <button id="leaveButton" class="secondary">Leave Room</button>
+          <button id="copyInviteButton" class="secondary">Copy Student Token</button>
           <button id="copyRoomButton" class="secondary">Copy Room ID</button>
           <button id="teacherModeButton" class="secondary">Teacher Mode</button>
           <button id="collabModeButton" class="secondary">Collab Mode</button>
+        </div>
+        <div class="meta">
+          <button id="gettingStartedButton" class="secondary">Getting Started</button>
         </div>
       </section>
 
@@ -245,11 +259,14 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
 
     <script nonce="${nonce}">
       const vscode = acquireVsCodeApi();
+      const createButton = document.getElementById("createButton");
       const joinButton = document.getElementById("joinButton");
       const leaveButton = document.getElementById("leaveButton");
+      const copyInviteButton = document.getElementById("copyInviteButton");
       const copyRoomButton = document.getElementById("copyRoomButton");
       const teacherModeButton = document.getElementById("teacherModeButton");
       const collabModeButton = document.getElementById("collabModeButton");
+      const gettingStartedButton = document.getElementById("gettingStartedButton");
       const roomTitle = document.getElementById("roomTitle");
       const roomSubtitle = document.getElementById("roomSubtitle");
       const roomMeta = document.getElementById("roomMeta");
@@ -259,8 +276,12 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       const chatInput = document.getElementById("chatInput");
       const sendButton = document.getElementById("sendButton");
 
+      createButton.addEventListener("click", () => vscode.postMessage({ type: "create" }));
       joinButton.addEventListener("click", () => vscode.postMessage({ type: "join" }));
       leaveButton.addEventListener("click", () => vscode.postMessage({ type: "leave" }));
+      copyInviteButton.addEventListener("click", () =>
+        vscode.postMessage({ type: "copy-student-invite" }),
+      );
       copyRoomButton.addEventListener("click", () =>
         vscode.postMessage({ type: "copy-room-id" }),
       );
@@ -269,6 +290,9 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
       );
       collabModeButton.addEventListener("click", () =>
         vscode.postMessage({ type: "collab-mode" }),
+      );
+      gettingStartedButton.addEventListener("click", () =>
+        vscode.postMessage({ type: "getting-started" }),
       );
 
       composer.addEventListener("submit", (event) => {
@@ -319,8 +343,10 @@ export class SidebarViewProvider implements vscode.WebviewViewProvider {
           });
         }
 
+        createButton.disabled = isInRoom || state.connectionState === "connecting";
         joinButton.disabled = isInRoom || state.connectionState === "connecting";
         leaveButton.disabled = !isInRoom;
+        copyInviteButton.disabled = false;
         copyRoomButton.disabled = !isInRoom;
         teacherModeButton.disabled = !isInRoom || !isTeacher || session.mode === "teacher";
         collabModeButton.disabled =

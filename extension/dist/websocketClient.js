@@ -58,6 +58,26 @@ class WebSocketClient extends events_1.EventEmitter {
     joinRoom(payload) {
         this.socket?.emit("join-room", payload);
     }
+    async createRoom(payload) {
+        if (!this.socket) {
+            throw new Error("WebSocket connection is not available.");
+        }
+        return await new Promise((resolve, reject) => {
+            this.socket
+                ?.timeout(10000)
+                .emit("create-room", payload, (error, response) => {
+                if (error) {
+                    reject(error);
+                    return;
+                }
+                if (!response) {
+                    reject(new Error("The server did not return a room creation response."));
+                    return;
+                }
+                resolve(response);
+            });
+        });
+    }
     sendYjsUpdate(payload) {
         this.socket?.emit("yjs-update", payload);
     }

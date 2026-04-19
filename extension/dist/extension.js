@@ -38,15 +38,19 @@ exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const collabManager_1 = require("./collabManager");
 const cursorManager_1 = require("./cursorManager");
+const gettingStartedPanel_1 = require("./gettingStartedPanel");
+const inviteTokenStore_1 = require("./inviteTokenStore");
 const sidebarViewProvider_1 = require("./sidebarViewProvider");
 const statusBar_1 = require("./statusBar");
 const usersTreeProvider_1 = require("./usersTreeProvider");
 const websocketClient_1 = require("./websocketClient");
+const HAS_SHOWN_GETTING_STARTED_KEY = "collabCode.hasShownGettingStarted";
 let collabManager;
 let statusBar;
 let cursorManager;
 function activate(context) {
     const wsClient = new websocketClient_1.WebSocketClient();
+    const inviteTokenStore = new inviteTokenStore_1.InviteTokenStore(context.globalState);
     statusBar = new statusBar_1.StatusBarManager();
     cursorManager = new cursorManager_1.CursorManager();
     collabManager = new collabManager_1.CollabManager(wsClient, cursorManager);
@@ -66,7 +70,7 @@ function activate(context) {
             : "Not connected";
     }));
     const createRoomCommand = vscode.commands.registerCommand("collabCode.createRoom", async () => {
-        await joinRoomFlow("teacher", true);
+        await createRoomFlow();
     });
     const joinRoomCommand = vscode.commands.registerCommand("collabCode.joinRoom", async () => {
         await joinRoomFlow();
@@ -90,6 +94,15 @@ function activate(context) {
     const copyRoomIdCommand = vscode.commands.registerCommand("collabCode.copyRoomId", () => {
         collabManager?.copyRoomId();
     });
+    const copyStudentInviteTokenCommand = vscode.commands.registerCommand("collabCode.copyStudentInviteToken", async () => {
+        const inviteSet = inviteTokenStore.getLatest();
+        if (!inviteSet) {
+            void vscode.window.showInformationMessage("CollabCode: Create a room first to store a student invite token.");
+            return;
+        }
+        await vscode.env.clipboard.writeText(inviteSet.studentInviteToken);
+        void vscode.window.showInformationMessage(`CollabCode: Student invite token for room ${inviteSet.roomId} copied to the clipboard.`);
+    });
     const quickChatCommand = vscode.commands.registerCommand("collabCode.sendChatMessage", async () => {
         if (!collabManager?.isInSession) {
             void vscode.window.showInformationMessage("CollabCode: Join a room before sending chat messages.");
@@ -105,8 +118,12 @@ function activate(context) {
             collabManager.sendChatMessage(text);
         }
     });
-    context.subscriptions.push(createRoomCommand, joinRoomCommand, leaveRoomCommand, teacherModeCommand, collabModeCommand, copyRoomIdCommand, quickChatCommand);
-    async function joinRoomFlow(defaultRole, isCreateFlow = false) {
+    const openGettingStartedCommand = vscode.commands.registerCommand(gettingStartedPanel_1.GettingStartedPanel.commandId, async () => {
+        await gettingStartedPanel_1.GettingStartedPanel.open();
+    });
+    context.subscriptions.push(createRoomCommand, joinRoomCommand, leaveRoomCommand, teacherModeCommand, collabModeCommand, copyRoomIdCommand, copyStudentInviteTokenCommand, quickChatCommand, openGettingStartedCommand);
+    void maybeShowGettingStarted(context);
+    async function createRoomFlow() {
         if (!collabManager) {
             return;
         }
@@ -116,46 +133,17 @@ function activate(context) {
         }
         const suggestedRoomId = vscode.workspace.getConfiguration("collabCode").get("lastRoomId") ?? "";
         const roomId = await vscode.window.showInputBox({
-            prompt: isCreateFlow ? "Create a room ID" : "Enter the room ID",
+            prompt: "Create a room ID",
             placeHolder: "for example: cs101-lab-1",
             value: suggestedRoomId,
             validateInput: (value) => value.trim().length > 0 ? null : "Room ID cannot be empty.",
+            ignoreFocusOut: true,
         });
         if (!roomId) {
             return;
         }
-        const savedName = vscode.workspace.getConfiguration("collabCode").get("userName") ?? "";
-        const userName = await vscode.window.showInputBox({
-            prompt: "Display name",
-            value: savedName,
-            placeHolder: "for example: Alice",
-            validateInput: (value) => value.trim().length > 0 ? null : "Display name cannot be empty.",
-        });
+        const userName = await promptForDisplayName();
         if (!userName) {
-            return;
-        }
-        let role = defaultRole;
-        if (!role) {
-            const selectedRole = await vscode.window.showQuickPick([
-                {
-                    label: "Teacher",
-                    description: "Can switch between teacher and collaboration modes",
-                    value: "teacher",
-                },
-                {
-                    label: "Student",
-                    description: "Can collaborate unless the teacher enables read-only mode",
-                    value: "student",
-                },
-            ], {
-                placeHolder: "Choose how you want to join this room",
-            });
-            if (!selectedRole) {
-                return;
-            }
-            role = selectedRole.value;
-        }
-        if (!role) {
             return;
         }
         await vscode.workspace
@@ -164,7 +152,83 @@ function activate(context) {
         await vscode.workspace
             .getConfiguration("collabCode")
             .update("lastRoomId", roomId.trim(), vscode.ConfigurationTarget.Global);
-        await collabManager.joinRoom(roomId.trim(), userName.trim(), role);
+        const inviteSet = await collabManager.createRoom(roomId.trim(), userName.trim());
+        if (!inviteSet) {
+            return;
+        }
+        await saveInviteTokens(inviteSet);
+        await showInviteTokens(inviteSet);
+    }
+    async function joinRoomFlow() {
+        if (!collabManager) {
+            return;
+        }
+        if (collabManager.isInSession) {
+            void vscode.window.showInformationMessage("CollabCode: Leave the current room before joining another one.");
+            return;
+        }
+        const inviteToken = await vscode.window.showInputBox({
+            prompt: "Paste the invite token",
+            placeHolder: "Use the teacher or student invite token",
+            password: true,
+            ignoreFocusOut: true,
+            validateInput: (value) => value.trim().length > 0 ? null : "Invite token cannot be empty.",
+        });
+        if (!inviteToken) {
+            return;
+        }
+        const userName = await promptForDisplayName();
+        if (!userName) {
+            return;
+        }
+        await vscode.workspace
+            .getConfiguration("collabCode")
+            .update("userName", userName.trim(), vscode.ConfigurationTarget.Global);
+        await collabManager.joinRoom(inviteToken.trim(), userName.trim());
+    }
+    async function promptForDisplayName() {
+        const savedName = vscode.workspace.getConfiguration("collabCode").get("userName") ?? "";
+        return await vscode.window.showInputBox({
+            prompt: "Display name",
+            value: savedName,
+            placeHolder: "for example: Alice",
+            validateInput: (value) => value.trim().length > 0 ? null : "Display name cannot be empty.",
+            ignoreFocusOut: true,
+        });
+    }
+    async function saveInviteTokens(inviteSet) {
+        const storedInviteSet = {
+            ...inviteSet,
+            createdAt: Date.now(),
+        };
+        await inviteTokenStore.save(storedInviteSet);
+    }
+    async function showInviteTokens(inviteSet) {
+        const content = [
+            `CollabCode room: ${inviteSet.roomId}`,
+            "",
+            "Teacher invite token:",
+            inviteSet.teacherInviteToken,
+            "",
+            "Student invite token:",
+            inviteSet.studentInviteToken,
+            "",
+            "Notes:",
+            "- Keep the teacher token private.",
+            "- Share only the student token with collaborators.",
+            "- The student token has already been copied to your clipboard.",
+            "- You can also run `CollabCode: Copy Student Invite Token` later.",
+        ].join("\n");
+        await vscode.env.clipboard.writeText(inviteSet.studentInviteToken);
+        const inviteDocument = await vscode.workspace.openTextDocument({
+            language: "plaintext",
+            content,
+        });
+        await vscode.window.showTextDocument(inviteDocument, {
+            preview: false,
+            preserveFocus: false,
+        });
+        void vscode.window.showInformationMessage(`CollabCode: Room ${inviteSet.roomId} created. Student invite token copied to the clipboard.`);
     }
     const initialState = collabManager.viewState;
     statusBar.update(initialState);
@@ -178,5 +242,13 @@ function deactivate() {
     collabManager?.dispose();
     statusBar?.dispose();
     cursorManager?.dispose();
+}
+async function maybeShowGettingStarted(context) {
+    const hasShown = context.globalState.get(HAS_SHOWN_GETTING_STARTED_KEY) ?? false;
+    if (hasShown) {
+        return;
+    }
+    await context.globalState.update(HAS_SHOWN_GETTING_STARTED_KEY, true);
+    await gettingStartedPanel_1.GettingStartedPanel.open();
 }
 //# sourceMappingURL=extension.js.map

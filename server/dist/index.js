@@ -1,253 +1,80 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
-const cors_1 = __importDefault(require("cors"));
-const express_1 = __importDefault(require("express"));
-const http_1 = require("http");
-const socket_io_1 = require("socket.io");
-const roomManager_1 = require("./roomManager");
-const PORT = Number(process.env.PORT ?? 3001);
-const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "*";
-const MAX_ROOM_ID_LENGTH = 64;
-const MAX_USER_NAME_LENGTH = 48;
-const MAX_DOCUMENT_NAME_LENGTH = 120;
-const MAX_LANGUAGE_ID_LENGTH = 50;
-const MAX_CHAT_MESSAGE_LENGTH = 2000;
-const app = (0, express_1.default)();
-app.use((0, cors_1.default)());
-app.use(express_1.default.json());
-const httpServer = (0, http_1.createServer)(app);
-const io = new socket_io_1.Server(httpServer, {
-    cors: {
-        origin: CORS_ORIGIN,
-        methods: ["GET", "POST"],
-    },
-    parser: require("socket.io-msgpack-parser"),
+const path = __importStar(require("path"));
+const protocol_1 = require("./protocol");
+const serverApp_1 = require("./serverApp");
+const server = (0, serverApp_1.createCollabServer)({
+    adminSecret: process.env.COLLABCODE_ADMIN_SECRET?.trim() ?? "",
+    chatMessageLimit: Math.max(1, Number(process.env.COLLABCODE_CHAT_MESSAGE_LIMIT ?? 8)),
+    chatMessageWindowMs: Math.max(250, Number(process.env.COLLABCODE_CHAT_MESSAGE_WINDOW_MS ?? 10000)),
+    cleanupIntervalMs: Math.max(60000, Number(process.env.COLLABCODE_CLEANUP_INTERVAL_MS ?? 300000)),
+    corsOrigin: process.env.CORS_ORIGIN ?? "*",
+    createRoomLimit: Math.max(1, Number(process.env.COLLABCODE_CREATE_ROOM_LIMIT ?? 12)),
+    createRoomWindowMs: Math.max(1000, Number(process.env.COLLABCODE_CREATE_ROOM_WINDOW_MS ?? 10 * 60 * 1000)),
+    cursorUpdateLimit: Math.max(1, Number(process.env.COLLABCODE_CURSOR_UPDATE_LIMIT ?? 120)),
+    cursorUpdateWindowMs: Math.max(250, Number(process.env.COLLABCODE_CURSOR_UPDATE_WINDOW_MS ?? 10000)),
+    dbPath: process.env.COLLABCODE_DB_PATH?.trim() ||
+        path.join(process.cwd(), "data", "collabcode.sqlite"),
+    inviteSecret: resolveInviteSecret(),
+    inviteTokenTtlHours: Math.max(1, Number(process.env.COLLABCODE_INVITE_TTL_HOURS ?? 168)),
+    joinRoomLimit: Math.max(1, Number(process.env.COLLABCODE_JOIN_ROOM_LIMIT ?? 40)),
+    joinRoomWindowMs: Math.max(1000, Number(process.env.COLLABCODE_JOIN_ROOM_WINDOW_MS ?? 10 * 60 * 1000)),
+    maxUsersPerRoom: Math.max(2, Number(process.env.COLLABCODE_MAX_USERS_PER_ROOM ?? 20)),
+    port: Number(process.env.PORT ?? 3001),
+    roomTtlHours: Math.max(1, Number(process.env.COLLABCODE_ROOM_TTL_HOURS ?? 168)),
 });
-const roomManager = new roomManager_1.RoomManager();
-app.get("/health", (_req, res) => {
-    res.json({
-        status: "ok",
-        rooms: roomManager.listRooms().length,
-        timestamp: Date.now(),
-    });
+void server.listen();
+const shutdown = async () => {
+    await server.close();
+};
+process.once("SIGINT", () => {
+    void shutdown();
 });
-app.get("/rooms", (_req, res) => {
-    res.json({ rooms: roomManager.listRooms() });
+process.once("SIGTERM", () => {
+    void shutdown();
 });
-io.on("connection", (socket) => {
-    socket.on("join-room", (rawPayload) => {
-        const payload = sanitizeJoinPayload(rawPayload);
-        if (!payload) {
-            emitProtocolError(socket, "Invalid room join payload.");
-            return;
-        }
-        if (roomManager.getUser(socket.id)) {
-            emitProtocolError(socket, "This client is already joined to a room.");
-            return;
-        }
-        const { room, user, createdRoom } = roomManager.addUser(socket.id, payload);
-        socket.join(room.id);
-        const roomState = roomManager.getRoomState(room.id, socket.id);
-        if (!roomState) {
-            emitProtocolError(socket, "Unable to initialize the room state.");
-            return;
-        }
-        socket.emit("room-state", roomState);
-        socket.to(room.id).emit("user-joined", { user: roomManager.getPublicUser(user) });
-        const joinMessage = room.messages[room.messages.length - 1];
-        if (joinMessage?.type === "system") {
-            socket.to(room.id).emit("chat-message", joinMessage);
-        }
-        if (createdRoom) {
-            console.log(`[Room] Created ${room.id} for ${payload.documentName}`);
-        }
-        console.log(`[Room] ${user.name} joined ${room.id} as ${user.role} (${room.users.size} users)`);
-    });
-    socket.on("yjs-update", (rawPayload) => {
-        if (!rawPayload || typeof rawPayload.roomId !== "string" || !(rawPayload.update instanceof Uint8Array)) {
-            emitProtocolError(socket, "Invalid document update payload.");
-            return;
-        }
-        if (!roomManager.isRoomMember(socket.id, rawPayload.roomId)) {
-            emitProtocolError(socket, "You are not a member of that room.");
-            return;
-        }
-        if (!roomManager.canEdit(socket.id)) {
-            emitProtocolError(socket, "You are in read-only mode.");
-            return;
-        }
-        const applied = roomManager.applyYjsUpdate(rawPayload.roomId, rawPayload.update);
-        if (!applied) {
-            emitProtocolError(socket, "Unable to apply the document update.");
-            return;
-        }
-        socket.to(rawPayload.roomId).emit("yjs-update", {
-            roomId: rawPayload.roomId,
-            update: rawPayload.update,
-        });
-    });
-    socket.on("cursor-update", (rawPayload) => {
-        const payload = sanitizeCursorPayload(rawPayload);
-        if (!payload) {
-            emitProtocolError(socket, "Invalid cursor payload.");
-            return;
-        }
-        if (!roomManager.isRoomMember(socket.id, payload.roomId)) {
-            emitProtocolError(socket, "You are not a member of that room.");
-            return;
-        }
-        const cursorState = roomManager.updateCursor(socket.id, payload);
-        if (!cursorState) {
-            emitProtocolError(socket, "Unable to update the cursor.");
-            return;
-        }
-        socket.to(payload.roomId).emit("cursor-update", cursorState);
-    });
-    socket.on("chat-message", (rawPayload) => {
-        const payload = sanitizeChatPayload(rawPayload);
-        if (!payload) {
-            emitProtocolError(socket, "Invalid chat message payload.");
-            return;
-        }
-        if (!roomManager.isRoomMember(socket.id, payload.roomId)) {
-            emitProtocolError(socket, "You are not a member of that room.");
-            return;
-        }
-        const message = roomManager.addChatMessage(socket.id, payload.text);
-        if (!message) {
-            emitProtocolError(socket, "Unable to send the chat message.");
-            return;
-        }
-        io.to(payload.roomId).emit("chat-message", message);
-    });
-    socket.on("mode-change", (rawPayload) => {
-        const payload = sanitizeModePayload(rawPayload);
-        if (!payload) {
-            emitProtocolError(socket, "Invalid mode change payload.");
-            return;
-        }
-        if (!roomManager.isRoomMember(socket.id, payload.roomId)) {
-            emitProtocolError(socket, "You are not a member of that room.");
-            return;
-        }
-        const user = roomManager.getUser(socket.id);
-        if (!user || user.role !== "teacher") {
-            emitProtocolError(socket, "Only the teacher can change the room mode.");
-            return;
-        }
-        const updated = roomManager.setMode(payload.roomId, payload.mode);
-        if (!updated) {
-            emitProtocolError(socket, "Unable to update the room mode.");
-            return;
-        }
-        io.to(payload.roomId).emit("mode-changed", { mode: payload.mode });
-        const systemMessage = roomManager.addSystemMessage(payload.roomId, `${user.name} switched the room to ${payload.mode === "teacher" ? "Teacher" : "Collaboration"} mode.`);
-        if (systemMessage) {
-            io.to(payload.roomId).emit("chat-message", systemMessage);
-        }
-    });
-    socket.on("disconnect", () => {
-        const removedUser = roomManager.removeUser(socket.id);
-        if (!removedUser) {
-            return;
-        }
-        socket.to(removedUser.roomId).emit("user-left", { userId: removedUser.user.id });
-        socket.to(removedUser.roomId).emit("cursor-remove", { userId: removedUser.user.id });
-        const roomState = roomManager.getRoom(removedUser.roomId);
-        const latestMessage = roomState?.messages[roomState.messages.length - 1];
-        if (latestMessage?.type === "system") {
-            socket.to(removedUser.roomId).emit("chat-message", latestMessage);
-        }
-        if (removedUser.roomIsEmpty) {
-            roomManager.deleteRoom(removedUser.roomId);
-            console.log(`[Room] Deleted empty room ${removedUser.roomId}`);
-        }
-    });
-});
-httpServer.listen(PORT, () => {
-    console.log(`CollabCode server listening on http://localhost:${PORT}`);
-});
-function emitProtocolError(socket, message) {
-    socket.emit("error", { message });
-}
-function sanitizeJoinPayload(payload) {
-    if (!payload) {
-        return null;
+function resolveInviteSecret() {
+    const configuredSecret = process.env.COLLABCODE_INVITE_SECRET?.trim();
+    if (configuredSecret) {
+        return configuredSecret;
     }
-    const roomId = normalizeText(payload.roomId, MAX_ROOM_ID_LENGTH);
-    const userName = normalizeText(payload.userName, MAX_USER_NAME_LENGTH);
-    const documentName = normalizeText(payload.documentName, MAX_DOCUMENT_NAME_LENGTH) || "collab-code.ts";
-    const languageId = normalizeText(payload.languageId, MAX_LANGUAGE_ID_LENGTH) || "plaintext";
-    if (!roomId || !userName) {
-        return null;
+    if (process.env.NODE_ENV === "production") {
+        throw new Error(`COLLABCODE_INVITE_SECRET is required when NODE_ENV is production for CollabCode ${protocol_1.SERVER_VERSION}.`);
     }
-    const role = payload.role === "teacher" ? "teacher" : "student";
-    return {
-        roomId,
-        userName,
-        role,
-        documentName,
-        languageId,
-        initialCode: typeof payload.initialCode === "string" ? payload.initialCode : "",
-    };
-}
-function sanitizeCursorPayload(payload) {
-    if (!payload || !payload.cursor) {
-        return null;
-    }
-    const roomId = normalizeText(payload.roomId, MAX_ROOM_ID_LENGTH);
-    if (!roomId) {
-        return null;
-    }
-    if (!isValidPosition(payload.cursor)) {
-        return null;
-    }
-    if (payload.selection) {
-        if (!isValidPosition(payload.selection.start) || !isValidPosition(payload.selection.end)) {
-            return null;
-        }
-    }
-    return {
-        roomId,
-        cursor: payload.cursor,
-        selection: payload.selection,
-    };
-}
-function sanitizeChatPayload(payload) {
-    if (!payload) {
-        return null;
-    }
-    const roomId = normalizeText(payload.roomId, MAX_ROOM_ID_LENGTH);
-    const text = normalizeText(payload.text, MAX_CHAT_MESSAGE_LENGTH);
-    if (!roomId || !text) {
-        return null;
-    }
-    return { roomId, text };
-}
-function sanitizeModePayload(payload) {
-    if (!payload) {
-        return null;
-    }
-    const roomId = normalizeText(payload.roomId, MAX_ROOM_ID_LENGTH);
-    if (!roomId) {
-        return null;
-    }
-    const mode = payload.mode === "teacher" ? "teacher" : "collaboration";
-    return { roomId, mode };
-}
-function normalizeText(value, maxLength) {
-    if (typeof value !== "string") {
-        return "";
-    }
-    return value.trim().slice(0, maxLength);
-}
-function isValidPosition(position) {
-    return (Number.isInteger(position.line) &&
-        Number.isInteger(position.character) &&
-        position.line >= 0 &&
-        position.character >= 0);
+    console.warn("[Auth] Using the local development invite secret. Set COLLABCODE_INVITE_SECRET before production deploys.");
+    return "collabcode-local-dev-secret-change-me";
 }
 //# sourceMappingURL=index.js.map

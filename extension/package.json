@@ -1,10 +1,15 @@
 {
   "name": "collab-code",
   "displayName": "CollabCode",
-  "description": "VS Code extension for room-based collaborative editing with chat and teacher mode.",
-  "version": "1.0.0",
+  "description": "Hosted room-based collaboration for VS Code with invite tokens, chat, and teacher mode.",
+  "version": "1.1.0",
   "publisher": "collab-code",
   "license": "MIT",
+  "icon": "resources/collabcode.png",
+  "galleryBanner": {
+    "color": "#14213d",
+    "theme": "dark"
+  },
   "keywords": [
     "collaboration",
     "live-share",
@@ -12,7 +17,9 @@
     "education",
     "realtime",
     "socket.io",
-    "yjs"
+    "yjs",
+    "classroom",
+    "invite-only"
   ],
   "repository": {
     "type": "git",
@@ -26,13 +33,16 @@
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "Education"
   ],
   "activationEvents": [
     "onCommand:collabCode.createRoom",
     "onCommand:collabCode.joinRoom",
     "onCommand:collabCode.leaveRoom",
     "onCommand:collabCode.sendChatMessage",
+    "onCommand:collabCode.copyStudentInviteToken",
+    "onCommand:collabCode.openGettingStarted",
     "onView:collabCode.room",
     "onView:collabCode.users"
   ],
@@ -64,8 +74,16 @@
         "title": "CollabCode: Copy Room ID"
       },
       {
+        "command": "collabCode.copyStudentInviteToken",
+        "title": "CollabCode: Copy Student Invite Token"
+      },
+      {
         "command": "collabCode.sendChatMessage",
         "title": "CollabCode: Send Chat Message"
+      },
+      {
+        "command": "collabCode.openGettingStarted",
+        "title": "CollabCode: Open Getting Started"
       }
     ],
     "viewsContainers": {
@@ -105,6 +123,11 @@
           "command": "collabCode.leaveRoom",
           "when": "view == collabCode.room",
           "group": "navigation"
+        },
+        {
+          "command": "collabCode.copyStudentInviteToken",
+          "when": "view == collabCode.room",
+          "group": "navigation"
         }
       ]
     },
@@ -113,8 +136,8 @@
       "properties": {
         "collabCode.serverUrl": {
           "type": "string",
-          "default": "http://localhost:3001",
-          "description": "URL of the CollabCode WebSocket server"
+          "default": "https://code-collab-5qo3.onrender.com",
+          "description": "URL of the CollabCode WebSocket server. Override this only if you self-host the backend."
         },
         "collabCode.userName": {
           "type": "string",
@@ -138,6 +161,7 @@
     "vscode:prepublish": "npm run build",
     "build": "tsc -p tsconfig.json",
     "watch": "tsc -watch -p tsconfig.json",
+    "test": "npm run build && node tests/smoke.test.js",
     "package": "npx @vscode/vsce package --no-yarn",
     "publish:marketplace": "npx @vscode/vsce publish --no-yarn"
   },

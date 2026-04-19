@@ -37,6 +37,8 @@ exports.CollabManager = void 0;
 const path = __importStar(require("path"));
 const vscode = __importStar(require("vscode"));
 const Y = __importStar(require("yjs"));
+const errors_1 = require("./errors");
+const protocol_1 = require("./protocol");
 const MAX_CHAT_HISTORY = 100;
 const READ_ONLY_WARNING_COOLDOWN_MS = 1500;
 class CollabManager {
@@ -65,14 +67,72 @@ class CollabManager {
     get viewState() {
         return this.buildViewState();
     }
-    async joinRoom(roomId, userName, role) {
+    async createRoom(roomId, userName) {
+        if (this.session) {
+            void vscode.window.showInformationMessage("CollabCode: Leave the current room before creating another one.");
+            return null;
+        }
+        const payload = await this.buildCreatePayload(roomId, userName);
+        const serverUrl = vscode.workspace.getConfiguration("collabCode").get("serverUrl") ??
+            protocol_1.DEFAULT_SERVER_URL;
+        this.intentionalDisconnect = false;
+        this.pendingJoinRequest = null;
+        this.connectionState = "connecting";
+        this.emitState();
+        try {
+            await this.client.connect(serverUrl);
+            const response = await this.client.createRoom(payload);
+            if (!response.ok ||
+                !response.roomState ||
+                !response.teacherInviteToken ||
+                !response.studentInviteToken) {
+                this.client.disconnect();
+                this.pendingJoinRequest = null;
+                this.connectionState = "disconnected";
+                this.emitState();
+                const message = response.code && response.message
+                    ? (0, errors_1.describeProtocolError)({
+                        code: response.code,
+                        message: response.message,
+                        retryAfterMs: response.retryAfterMs,
+                    })
+                    : response.message ?? "Unable to create the room.";
+                void vscode.window.showErrorMessage(`CollabCode: ${message}`);
+                return null;
+            }
+            this.pendingJoinRequest = {
+                inviteToken: response.teacherInviteToken,
+                userName: userName.trim(),
+                clientVersion: protocol_1.CLIENT_VERSION,
+            };
+            await this.handleRoomState(response.roomState);
+            return {
+                roomId: response.roomState.room.id,
+                teacherInviteToken: response.teacherInviteToken,
+                studentInviteToken: response.studentInviteToken,
+            };
+        }
+        catch (error) {
+            this.client.disconnect();
+            this.pendingJoinRequest = null;
+            this.connectionState = "disconnected";
+            this.emitState();
+            void vscode.window.showErrorMessage(`CollabCode: ${(0, errors_1.describeConnectionFailure)(serverUrl, error)}`);
+            return null;
+        }
+    }
+    async joinRoom(inviteToken, userName) {
         if (this.session) {
             void vscode.window.showInformationMessage("CollabCode: Leave the current room before joining another one.");
             return;
         }
-        const payload = await this.buildJoinPayload(roomId, userName, role);
+        const payload = {
+            inviteToken: inviteToken.trim(),
+            userName: userName.trim(),
+            clientVersion: protocol_1.CLIENT_VERSION,
+        };
         const serverUrl = vscode.workspace.getConfiguration("collabCode").get("serverUrl") ??
-            "http://localhost:3001";
+            protocol_1.DEFAULT_SERVER_URL;
         this.intentionalDisconnect = false;
         this.pendingJoinRequest = payload;
         this.connectionState = "connecting";
@@ -82,10 +142,11 @@ class CollabManager {
             this.client.joinRoom(payload);
         }
         catch (error) {
+            this.client.disconnect();
             this.pendingJoinRequest = null;
             this.connectionState = "disconnected";
             this.emitState();
-            void vscode.window.showErrorMessage(`CollabCode: Unable to connect to ${serverUrl}. ${getErrorMessage(error)}`);
+            void vscode.window.showErrorMessage(`CollabCode: ${(0, errors_1.describeConnectionFailure)(serverUrl, error)}`);
         }
     }
     leaveRoom(silent = false) {
@@ -198,8 +259,21 @@ class CollabManager {
             this.session.mode = mode;
             this.emitState();
         });
-        this.client.on("error", ({ message }) => {
-            void vscode.window.showWarningMessage(`CollabCode: ${message}`);
+        this.client.on("error", (error) => {
+            const friendlyMessage = (0, errors_1.describeProtocolError)(error);
+            if (error.code === "read-only") {
+                void vscode.window.showWarningMessage(`CollabCode: ${friendlyMessage}`);
+            }
+            else {
+                void vscode.window.showErrorMessage(`CollabCode: ${friendlyMessage}`);
+            }
+            if (this.connectionState === "connecting" ||
+                this.connectionState === "reconnecting") {
+                this.pendingJoinRequest = null;
+                this.connectionState = "disconnected";
+                this.client.disconnect();
+                this.emitState();
+            }
         });
         this.client.on("disconnect", (reason) => {
             if (this.intentionalDisconnect) {
@@ -228,6 +302,14 @@ class CollabManager {
         }));
     }
     async handleRoomState(payload) {
+        if (payload.protocolVersion !== protocol_1.PROTOCOL_VERSION) {
+            this.pendingJoinRequest = null;
+            this.connectionState = "disconnected";
+            this.client.disconnect();
+            this.emitState();
+            void vscode.window.showErrorMessage(`CollabCode: This server speaks protocol ${payload.protocolVersion}, but this extension expects ${protocol_1.PROTOCOL_VERSION}. Install the latest release and try again.`);
+            return;
+        }
         const wasReconnecting = this.connectionState === "reconnecting";
         const users = new Map(payload.room.users.map((user) => [user.id, user]));
         const selfUser = users.get(payload.selfId);
@@ -235,7 +317,6 @@ class CollabManager {
             void vscode.window.showWarningMessage("CollabCode: The server response did not include your user record.");
             return;
         }
-        const requestedRole = this.pendingJoinRequest?.role;
         this.session = {
             roomId: payload.room.id,
             selfId: payload.selfId,
@@ -256,9 +337,6 @@ class CollabManager {
         this.emitState();
         if (wasReconnecting) {
             void vscode.window.showInformationMessage(`CollabCode: Reconnected to room ${payload.room.id}.`);
-        }
-        else if (requestedRole === "teacher" && selfUser.role !== "teacher") {
-            void vscode.window.showWarningMessage("CollabCode: This room already has a teacher. You joined as a student.");
         }
         else {
             void vscode.window.showInformationMessage(`CollabCode: Joined room ${payload.room.id} as ${selfUser.role}.`);
@@ -373,27 +451,27 @@ class CollabManager {
         this.ydoc = null;
         this.ytext = null;
     }
-    async buildJoinPayload(roomId, userName, role) {
+    async buildCreatePayload(roomId, userName) {
         const activeEditor = vscode.window.activeTextEditor;
         const activeDocument = activeEditor?.document;
         if (!activeDocument) {
             return {
                 roomId: roomId.trim(),
                 userName: userName.trim(),
-                role,
                 documentName: `${roomId.trim() || "collab-code"}.txt`,
                 languageId: "plaintext",
                 initialCode: "",
+                clientVersion: protocol_1.CLIENT_VERSION,
             };
         }
         const fileName = path.basename(activeDocument.fileName || "") || `${roomId.trim()}.txt`;
         return {
             roomId: roomId.trim(),
             userName: userName.trim(),
-            role,
             documentName: fileName,
             languageId: activeDocument.languageId || "plaintext",
             initialCode: activeDocument.getText(),
+            clientVersion: protocol_1.CLIENT_VERSION,
         };
     }
     async ensureCollaborativeDocument(documentState, reveal, forceNew = false) {
@@ -510,10 +588,4 @@ class CollabManager {
     }
 }
 exports.CollabManager = CollabManager;
-function getErrorMessage(error) {
-    if (error instanceof Error && error.message) {
-        return error.message;
-    }
-    return "Unknown error.";
-}
 //# sourceMappingURL=collabManager.js.map

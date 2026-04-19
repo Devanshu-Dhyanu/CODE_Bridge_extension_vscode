@@ -5,6 +5,17 @@ export type ConnectionState =
   | "connecting"
   | "connected"
   | "reconnecting";
+export type ProtocolErrorCode =
+  | "admin-required"
+  | "invalid-payload"
+  | "invite-invalid-or-expired"
+  | "protocol-mismatch"
+  | "rate-limited"
+  | "read-only"
+  | "room-full"
+  | "room-unavailable"
+  | "teacher-already-connected"
+  | "unauthorized";
 
 export interface CursorPosition {
   line: number;
@@ -50,13 +61,19 @@ export interface RoomDocument {
   code: string;
 }
 
-export interface JoinRoomPayload {
+export interface CreateRoomPayload {
   roomId: string;
   userName: string;
-  role: UserRole;
   documentName: string;
   languageId: string;
   initialCode: string;
+  clientVersion: string;
+}
+
+export interface JoinRoomPayload {
+  inviteToken: string;
+  userName: string;
+  clientVersion: string;
 }
 
 export interface YjsUpdatePayload {
@@ -93,6 +110,20 @@ export interface RoomStatePayload {
   };
   selfId: string;
   yjsState: Uint8Array;
+  protocolVersion: string;
+  serverVersion: string;
+}
+
+export interface CreateRoomResponse {
+  ok: boolean;
+  code?: ProtocolErrorCode;
+  message?: string;
+  roomState?: RoomStatePayload;
+  teacherInviteToken?: string;
+  studentInviteToken?: string;
+  protocolVersion?: string;
+  serverVersion?: string;
+  retryAfterMs?: number;
 }
 
 export interface SessionSnapshot {
@@ -109,4 +140,17 @@ export interface SessionSnapshot {
 export interface CollabViewState {
   connectionState: ConnectionState;
   session: SessionSnapshot | null;
+}
+
+export interface ProtocolErrorPayload {
+  code: ProtocolErrorCode;
+  message: string;
+  retryAfterMs?: number;
+}
+
+export interface StoredInviteTokenSet {
+  roomId: string;
+  teacherInviteToken: string;
+  studentInviteToken: string;
+  createdAt: number;
 }
