@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import { createServer, Server as HttpServer } from "http";
 import { Server, Socket } from "socket.io";
+import { toUint8Array } from "./binary";
 import { createInviteToken, verifyInviteToken } from "./inviteTokens";
 import { PersistentRoomStore } from "./persistentRoomStore";
 import { PROTOCOL_VERSION, SERVER_VERSION } from "./protocol";
@@ -349,11 +350,15 @@ export function createCollabServer(options: CollabServerOptions): CollabServer {
     });
 
     socket.on("yjs-update", (rawPayload: YjsUpdatePayload) => {
-      if (
-        !rawPayload ||
-        typeof rawPayload.roomId !== "string" ||
-        !(rawPayload.update instanceof Uint8Array)
-      ) {
+      if (!rawPayload || typeof rawPayload.roomId !== "string") {
+        emitProtocolError(socket, "invalid-payload", "Invalid document update payload.");
+        return;
+      }
+
+      let update: Uint8Array;
+      try {
+        update = toUint8Array(rawPayload.update);
+      } catch {
         emitProtocolError(socket, "invalid-payload", "Invalid document update payload.");
         return;
       }
@@ -368,7 +373,7 @@ export function createCollabServer(options: CollabServerOptions): CollabServer {
         return;
       }
 
-      const applied = roomManager.applyYjsUpdate(rawPayload.roomId, rawPayload.update);
+      const applied = roomManager.applyYjsUpdate(rawPayload.roomId, update);
       if (!applied) {
         emitProtocolError(
           socket,
@@ -380,7 +385,7 @@ export function createCollabServer(options: CollabServerOptions): CollabServer {
 
       socket.to(rawPayload.roomId).emit("yjs-update", {
         roomId: rawPayload.roomId,
-        update: rawPayload.update,
+        update,
       });
     });
 

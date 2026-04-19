@@ -6,11 +6,14 @@ const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { io } = require("socket.io-client");
 const parser = require("socket.io-msgpack-parser");
+const Y = require("yjs");
 const { createCollabServer } = require("../dist/serverApp.js");
+const { toUint8Array } = require("../dist/binary.js");
 
 async function main() {
   await persistsRoomsAcrossRestart();
   await rateLimitsRepeatedRoomCreation();
+  await acceptsArrayBufferDocumentUpdates();
   console.log("server integration checks passed");
 }
 
@@ -166,6 +169,84 @@ async function rateLimitsRepeatedRoomCreation() {
 
     firstSocket.disconnect();
     secondSocket.disconnect();
+  } finally {
+    await server.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function acceptsArrayBufferDocumentUpdates() {
+  const tempDir = mkdtempSync(join(tmpdir(), "collabcode-yjs-update-"));
+  const dbPath = join(tempDir, "collabcode.sqlite");
+  const port = await getFreePort();
+  const server = await startServer({
+    adminSecret: "",
+    chatMessageLimit: 8,
+    chatMessageWindowMs: 10000,
+    cleanupIntervalMs: 300000,
+    corsOrigin: "*",
+    createRoomLimit: 12,
+    createRoomWindowMs: 600000,
+    cursorUpdateLimit: 120,
+    cursorUpdateWindowMs: 10000,
+    dbPath,
+    inviteSecret: "invite-secret",
+    inviteTokenTtlHours: 168,
+    joinRoomLimit: 40,
+    joinRoomWindowMs: 600000,
+    maxUsersPerRoom: 20,
+    port,
+    roomTtlHours: 168,
+  });
+
+  try {
+    const hostSocket = await connectSocket(port);
+    const studentSocket = await connectSocket(port);
+
+    const createResponse = await emitWithAck(hostSocket, "create-room", {
+      roomId: "array-buffer-room",
+      userName: "Host",
+      documentName: "lesson.ts",
+      languageId: "typescript",
+      initialCode: "",
+      clientVersion: "1.1.0",
+    });
+
+    assert.equal(createResponse.ok, true);
+
+    studentSocket.emit("join-room", {
+      inviteToken: createResponse.studentInviteToken,
+      userName: "Student",
+      clientVersion: "1.1.0",
+    });
+    await once(studentSocket, "room-state");
+
+    const ydoc = new Y.Doc();
+    ydoc.getText("code").insert(0, "console.log('synced');");
+    const encodedUpdate = Y.encodeStateAsUpdate(ydoc);
+    const arrayBufferUpdate = encodedUpdate.buffer.slice(
+      encodedUpdate.byteOffset,
+      encodedUpdate.byteOffset + encodedUpdate.byteLength,
+    );
+
+    hostSocket.emit("yjs-update", {
+      roomId: "array-buffer-room",
+      update: arrayBufferUpdate,
+    });
+
+    const [broadcastPayload] = await once(studentSocket, "yjs-update");
+    const normalizedUpdate = toUint8Array(broadcastPayload.update);
+    assert.equal(broadcastPayload.roomId, "array-buffer-room");
+
+    const replicatedDoc = new Y.Doc();
+    Y.applyUpdate(replicatedDoc, normalizedUpdate);
+    assert.equal(replicatedDoc.getText("code").toString(), "console.log('synced');");
+
+    const roomState = server.roomManager.getRoomState("array-buffer-room", hostSocket.id);
+    assert.equal(roomState.room.document.code, "console.log('synced');");
+
+    hostSocket.disconnect();
+    studentSocket.disconnect();
   } finally {
     await server.close();
     rmSync(tempDir, { recursive: true, force: true });

@@ -8,6 +8,7 @@ const cors_1 = __importDefault(require("cors"));
 const express_1 = __importDefault(require("express"));
 const http_1 = require("http");
 const socket_io_1 = require("socket.io");
+const binary_1 = require("./binary");
 const inviteTokens_1 = require("./inviteTokens");
 const persistentRoomStore_1 = require("./persistentRoomStore");
 const protocol_1 = require("./protocol");
@@ -187,9 +188,15 @@ function createCollabServer(options) {
             console.log(`[Room] ${user.name} joined ${room.id} as ${user.role} (${room.users.size} active user(s))`);
         });
         socket.on("yjs-update", (rawPayload) => {
-            if (!rawPayload ||
-                typeof rawPayload.roomId !== "string" ||
-                !(rawPayload.update instanceof Uint8Array)) {
+            if (!rawPayload || typeof rawPayload.roomId !== "string") {
+                emitProtocolError(socket, "invalid-payload", "Invalid document update payload.");
+                return;
+            }
+            let update;
+            try {
+                update = (0, binary_1.toUint8Array)(rawPayload.update);
+            }
+            catch {
                 emitProtocolError(socket, "invalid-payload", "Invalid document update payload.");
                 return;
             }
@@ -201,14 +208,14 @@ function createCollabServer(options) {
                 emitProtocolError(socket, "read-only", "You are in read-only mode.");
                 return;
             }
-            const applied = roomManager.applyYjsUpdate(rawPayload.roomId, rawPayload.update);
+            const applied = roomManager.applyYjsUpdate(rawPayload.roomId, update);
             if (!applied) {
                 emitProtocolError(socket, "room-unavailable", "Unable to apply the document update.");
                 return;
             }
             socket.to(rawPayload.roomId).emit("yjs-update", {
                 roomId: rawPayload.roomId,
-                update: rawPayload.update,
+                update,
             });
         });
         socket.on("cursor-update", (rawPayload) => {
