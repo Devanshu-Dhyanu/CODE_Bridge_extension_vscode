@@ -99,7 +99,8 @@
       "collabCode": [
         {
           "id": "collabCode.room",
-          "name": "Room"
+          "name": "Room",
+          "type": "webview"
         },
         {
           "id": "collabCode.users",

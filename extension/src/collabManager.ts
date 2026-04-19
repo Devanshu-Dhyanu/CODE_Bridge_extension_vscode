@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import * as Y from "yjs";
+import { toUint8Array } from "./binary";
 import { CursorManager } from "./cursorManager";
 import { describeConnectionFailure, describeProtocolError } from "./errors";
 import { CLIENT_VERSION, DEFAULT_SERVER_URL, PROTOCOL_VERSION } from "./protocol";
@@ -263,7 +264,7 @@ export class CollabManager {
         return;
       }
 
-      Y.applyUpdate(this.ydoc, update, "remote-sync");
+      Y.applyUpdate(this.ydoc, toUint8Array(update), "remote-sync");
     });
 
     this.client.on("cursor-update", (payload: CursorBroadcastPayload) => {
@@ -408,7 +409,7 @@ export class CollabManager {
     };
 
     await this.ensureCollaborativeDocument(payload.room.document, this.connectionState !== "reconnecting");
-    this.initializeYjs(payload.yjsState);
+    this.initializeYjs(toUint8Array(payload.yjsState));
 
     this.cursorManager.clearAll();
     for (const cursor of payload.room.cursors) {

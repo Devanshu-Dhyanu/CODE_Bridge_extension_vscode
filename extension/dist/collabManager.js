@@ -37,6 +37,7 @@ exports.CollabManager = void 0;
 const path = __importStar(require("path"));
 const vscode = __importStar(require("vscode"));
 const Y = __importStar(require("yjs"));
+const binary_1 = require("./binary");
 const errors_1 = require("./errors");
 const protocol_1 = require("./protocol");
 const MAX_CHAT_HISTORY = 100;
@@ -215,7 +216,7 @@ class CollabManager {
             if (!this.session || this.session.roomId !== roomId || !this.ydoc) {
                 return;
             }
-            Y.applyUpdate(this.ydoc, update, "remote-sync");
+            Y.applyUpdate(this.ydoc, (0, binary_1.toUint8Array)(update), "remote-sync");
         });
         this.client.on("cursor-update", (payload) => {
             if (!this.session || payload.userId === this.session.selfId) {
@@ -326,7 +327,7 @@ class CollabManager {
             messages: [...payload.room.messages],
         };
         await this.ensureCollaborativeDocument(payload.room.document, this.connectionState !== "reconnecting");
-        this.initializeYjs(payload.yjsState);
+        this.initializeYjs((0, binary_1.toUint8Array)(payload.yjsState));
         this.cursorManager.clearAll();
         for (const cursor of payload.room.cursors) {
             if (cursor.userId !== payload.selfId) {
